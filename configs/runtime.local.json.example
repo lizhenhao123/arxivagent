@@ -1,0 +1,48 @@
+{
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8080
+  },
+  "arxiv": {
+    "base_url": "https://export.arxiv.org/api/query",
+    "user_agent": "arxivagent/0.1 (+local)",
+    "max_results": 50,
+    "request_interval_seconds": 3
+  },
+  "postgres": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "postgres",
+    "password": "postgres",
+    "database": "arxiv_agent",
+    "sslmode": "disable"
+  },
+  "redis": {
+    "host": "127.0.0.1",
+    "port": 6379,
+    "password": "",
+    "db": 0
+  },
+  "storage": {
+    "pdf_dir": "./data/pdfs",
+    "image_dir": "./data/images",
+    "markdown_dir": "./data/markdown"
+  },
+  "site": {
+    "base_url": "http://127.0.0.1:3000",
+    "draft_path_prefix": "/drafts"
+  },
+  "worker": {
+    "python_bin": "python",
+    "parser_script": "worker/parse_pdf.py"
+  },
+  "llm": {
+    "base_url": "",
+    "api_key": "",
+    "model": ""
+  },
+  "scheduler": {
+    "timezone": "Asia/Shanghai",
+    "daily_run_time": "09:00"
+  }
+}

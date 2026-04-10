@@ -1,0 +1,60 @@
+{{define "home.tmpl"}}
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}}</title>
+  <style>
+    body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f3f5f7; color: #182026; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 60px; }
+    .hero { background: linear-gradient(135deg, #0f172a, #1d4ed8); color: #fff; padding: 28px; border-radius: 20px; }
+    .hero h1 { margin: 0 0 8px; font-size: 32px; }
+    .hero p { margin: 0; opacity: 0.9; }
+    .list { margin-top: 24px; display: grid; gap: 16px; }
+    .card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+    .card h2 { margin: 0 0 8px; font-size: 22px; }
+    .meta { color: #475569; font-size: 14px; margin-bottom: 10px; }
+    .summary { color: #334155; line-height: 1.7; }
+    .action { margin-top: 14px; }
+    .action a { color: #2563eb; text-decoration: none; font-weight: 600; }
+    .empty { background: #fff; border-radius: 16px; padding: 24px; margin-top: 24px; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>今日论文稿件</h1>
+      <p>这里展示当天已经生成的站内审阅稿。你可以点进去看完整 Markdown 渲染结果和实验图像。</p>
+    </section>
+
+    {{if .Drafts}}
+    <section class="list">
+      {{range .Drafts}}
+      <article class="card">
+        <h2>{{.Title}}</h2>
+        <div class="meta">
+          状态：{{.ReviewStatus}}
+          {{if .RecommendedOn}} | 日期：{{.RecommendedOn}}{{end}}
+        </div>
+        {{if .Summary}}<div class="summary">{{.Summary}}</div>{{end}}
+        <div class="action">
+          {{if .SiteSlug}}
+          <a href="/drafts/{{.SiteSlug}}">查看文章</a>
+          {{else}}
+          暂无可访问页面
+          {{end}}
+        </div>
+      </article>
+      {{end}}
+    </section>
+    {{else}}
+    <section class="empty">
+      今日还没有可展示的稿件。先运行发现任务和解析生成任务。
+    </section>
+    {{end}}
+  </div>
+</body>
+</html>
+{{end}}
+
