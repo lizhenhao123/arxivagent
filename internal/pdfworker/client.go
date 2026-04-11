@@ -30,17 +30,21 @@ type ParseResponse struct {
 	ParsedSections map[string]string        `json:"parsed_sections"`
 	Summary        map[string]interface{}   `json:"summary"`
 	Figures        []Figure                 `json:"figures"`
+	Equations      []string                 `json:"equations"`
 	RawTextExcerpt string                   `json:"raw_text_excerpt"`
 }
 
 type Figure struct {
-	FigureIndex int    `json:"figure_index"`
-	PageNo      int    `json:"page_no"`
-	FileName    string `json:"file_name"`
-	LocalPath   string `json:"local_path"`
-	MimeType    string `json:"mime_type"`
-	SizeBytes   int    `json:"size_bytes"`
-	Caption     string `json:"caption"`
+	FigureIndex  int     `json:"figure_index"`
+	PageNo       int     `json:"page_no"`
+	FileName     string  `json:"file_name"`
+	LocalPath    string  `json:"local_path"`
+	MimeType     string  `json:"mime_type"`
+	SizeBytes    int     `json:"size_bytes"`
+	Caption      string  `json:"caption"`
+	Width        int     `json:"width"`
+	Height       int     `json:"height"`
+	DiagramScore float64 `json:"diagram_score"`
 }
 
 func NewClient(cfg config.WorkerConfig) *Client {

@@ -7,42 +7,81 @@
   <title>{{.Title}}</title>
   <style>
     body { font-family: "Microsoft YaHei", sans-serif; margin: 0; background: #f3f5f7; color: #182026; }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 32px 20px 60px; }
+    .wrap { max-width: 1080px; margin: 0 auto; padding: 32px 20px 60px; }
     .hero { background: linear-gradient(135deg, #0f172a, #1d4ed8); color: #fff; padding: 28px; border-radius: 20px; }
-    .hero h1 { margin: 0 0 8px; font-size: 32px; }
-    .hero p { margin: 0; opacity: 0.9; }
+    .hero h1 { margin: 0 0 10px; font-size: 34px; }
+    .hero p { margin: 0; opacity: 0.92; line-height: 1.7; }
+    .panel { margin-top: 24px; background: #fff; border-radius: 18px; padding: 22px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+    .panel h2 { margin: 0 0 10px; font-size: 22px; }
+    .panel p { margin: 0 0 16px; color: #475569; line-height: 1.7; }
+    .form { display: grid; gap: 12px; }
+    .input { width: 100%; box-sizing: border-box; padding: 14px 16px; border: 1px solid #cbd5e1; border-radius: 12px; font-size: 15px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; }
+    .btn { border: none; border-radius: 12px; padding: 12px 16px; font-size: 15px; font-weight: 600; cursor: pointer; }
+    .btn-primary { background: #2563eb; color: #fff; }
+    .btn-primary:hover { background: #1d4ed8; }
+    .btn-secondary { background: #e2e8f0; color: #0f172a; }
+    .btn-secondary:hover { background: #cbd5e1; }
+    .notice { margin-top: 16px; padding: 14px 16px; border-radius: 12px; }
+    .notice-success { background: #dcfce7; color: #166534; }
+    .notice-error { background: #fee2e2; color: #991b1b; }
     .list { margin-top: 24px; display: grid; gap: 16px; }
-    .card { background: #fff; border-radius: 16px; padding: 20px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
-    .card h2 { margin: 0 0 8px; font-size: 22px; }
-    .meta { color: #475569; font-size: 14px; margin-bottom: 10px; }
-    .summary { color: #334155; line-height: 1.7; }
-    .action { margin-top: 14px; }
-    .action a { color: #2563eb; text-decoration: none; font-weight: 600; }
-    .empty { background: #fff; border-radius: 16px; padding: 24px; margin-top: 24px; }
+    .card { background: #fff; border-radius: 18px; padding: 22px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+    .card h3 { margin: 0 0 10px; font-size: 23px; line-height: 1.5; }
+    .title-link { color: #0f172a; text-decoration: none; }
+    .title-link:hover { color: #1d4ed8; }
+    .meta { color: #475569; font-size: 14px; margin-bottom: 12px; }
+    .summary { color: #334155; line-height: 1.8; }
+    .card-actions { margin-top: 16px; }
+    .card-actions a { display: inline-block; background: #2563eb; color: #fff; text-decoration: none; font-weight: 600; padding: 10px 14px; border-radius: 10px; }
+    .card-actions a:hover { background: #1d4ed8; }
+    .empty { margin-top: 24px; background: #fff; border-radius: 18px; padding: 24px; box-shadow: 0 8px 24px rgba(15, 23, 42, 0.08); }
+    @media (max-width: 720px) { .actions { flex-direction: column; } .btn { width: 100%; } }
   </style>
 </head>
 <body>
   <div class="wrap">
     <section class="hero">
       <h1>今日论文稿件</h1>
-      <p>这里展示当天已经生成的站内审阅稿。你可以点进去看完整 Markdown 渲染结果和实验图像。</p>
+      <p>这里展示当天已经生成的站内审阅稿。你可以先自定义搜索主题，再决定只做候选发现，或者直接搜索并生成 1 篇稿件。</p>
+    </section>
+
+    <section class="panel">
+      <h2>主题搜索与生成</h2>
+      <p>搜索主题支持自由输入，建议使用 arXiv 常见英文关键词，例如 <code>remote sensing foundation model</code>、<code>change detection</code>、<code>SAR segmentation</code>。</p>
+
+      <form class="form" method="post">
+        <input class="input" type="text" name="search_topic" value="{{.SearchTopic}}" placeholder="输入搜索主题，可留空使用系统默认主题">
+        <div class="actions">
+          <button class="btn btn-secondary" type="submit" formaction="/actions/discover">先搜索推荐</button>
+          <button class="btn btn-primary" type="submit" formaction="/actions/generate">搜索并生成 1 篇</button>
+        </div>
+      </form>
+
+      {{if .Message}}
+      <div class="notice notice-success">{{.Message}}</div>
+      {{end}}
+
+      {{if .Error}}
+      <div class="notice notice-error">{{.Error}}</div>
+      {{end}}
     </section>
 
     {{if .Drafts}}
     <section class="list">
       {{range .Drafts}}
       <article class="card">
-        <h2>{{.Title}}</h2>
+        <h3>{{if .SiteSlug}}<a class="title-link" href="/drafts/{{.SiteSlug}}">{{.Title}}</a>{{else}}{{.Title}}{{end}}</h3>
         <div class="meta">
           状态：{{.ReviewStatus}}
           {{if .RecommendedOn}} | 日期：{{.RecommendedOn}}{{end}}
         </div>
         {{if .Summary}}<div class="summary">{{.Summary}}</div>{{end}}
-        <div class="action">
+        <div class="card-actions">
           {{if .SiteSlug}}
-          <a href="/drafts/{{.SiteSlug}}">查看文章</a>
+          <a href="/drafts/{{.SiteSlug}}">查看详情</a>
           {{else}}
-          暂无可访问页面
+          <span>当前稿件尚未生成可访问页面。</span>
           {{end}}
         </div>
       </article>
@@ -50,11 +89,10 @@
     </section>
     {{else}}
     <section class="empty">
-      今日还没有可展示的稿件。先运行发现任务和解析生成任务。
+      今天还没有可展示的稿件。你可以先在上方输入主题，然后点击“搜索并生成 1 篇”。
     </section>
     {{end}}
   </div>
 </body>
 </html>
 {{end}}
-

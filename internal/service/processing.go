@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 
@@ -114,11 +115,10 @@ func (s *ProcessingService) ParseAndGenerate(ctx context.Context, input ParseGen
 	}
 
 	summary := buildStructuredSummary(parserOutput, paper.Title)
-	rawParserOutput, _ := json.Marshal(parserOutput)
 	generation := s.generateDraftContent(ctx, paper, parserOutput, summary)
 	markdown := generation.MarkdownContent
 	if strings.TrimSpace(markdown) == "" {
-		markdown = generateMarkdownDraft(paper.Title, paper.ArxivID, paper.SourceURL, summary, parserOutput.Figures)
+		markdown = generateMarkdownDraft(paper, parserOutput, summary)
 	}
 	renderedHTML := renderMarkdown(markdown)
 	slug := buildSlug(paper.Title + "-" + paper.ArxivID)
@@ -146,7 +146,7 @@ func (s *ProcessingService) ParseAndGenerate(ctx context.Context, input ParseGen
 		ConclusionCN:        generation.ConclusionCN,
 		LimitationsCN:       generation.LimitationsCN,
 		StructuredSummary:   summary,
-		RawParserOutput:     json.RawMessage(rawParserOutput),
+		RawParserOutput:     parserOutput,
 		RawGenerationOutput: generation.RawOutput,
 		ParserVersion:       "pymupdf-v1",
 		PromptVersion:       generation.PromptVersion,
@@ -165,6 +165,7 @@ func (s *ProcessingService) ParseAndGenerate(ctx context.Context, input ParseGen
 
 	draftID, err := s.repo.UpsertGeneratedDraft(
 		ctx, paper.ID, contentID, generation.RecommendedTitle,
+		generation.AltTitles,
 		generation.Summary,
 		generation.IntroText,
 		markdown, renderedHTML, generation.CoverText,
@@ -201,8 +202,14 @@ type llmDraftOutput struct {
 	MarkdownContent  string   `json:"markdown_content"`
 }
 
+type llmTitleOutput struct {
+	RecommendedTitle string   `json:"recommended_title"`
+	AltTitles        []string `json:"alt_titles"`
+}
+
 type generatedDraft struct {
 	RecommendedTitle string
+	AltTitles        []string
 	Summary          string
 	IntroText        string
 	CoverText        string
@@ -221,7 +228,8 @@ type generatedDraft struct {
 func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *repository.ProcessingPaper, parsed *pdfworker.ParseResponse, summary map[string]interface{}) generatedDraft {
 	fallback := generatedDraft{
 		RecommendedTitle: paper.Title,
-		Summary:          stringFromSummary(summary, "abstract"),
+		AltTitles:        nil,
+		Summary:          composeExecutiveSummary(summary),
 		IntroText:        composeIntro(paper.Title),
 		CoverText:        "今日论文推荐",
 		Tags:             []string{"arxiv", "remote-sensing", "foundation-model"},
@@ -231,7 +239,7 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 		ExperimentsCN:    stringFromSummary(summary, "experiments"),
 		ConclusionCN:     stringFromSummary(summary, "conclusion"),
 		LimitationsCN:    stringFromSummary(summary, "limitations"),
-		MarkdownContent:  generateMarkdownDraft(paper.Title, paper.ArxivID, paper.SourceURL, summary, parsed.Figures),
+		MarkdownContent:  generateMarkdownDraft(paper, parsed, summary),
 		PromptVersion:    "heuristic-v1",
 		RawOutput: map[string]interface{}{
 			"mode": "heuristic",
@@ -248,7 +256,9 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 	}
 
 	sectionSummaries, _ := json.Marshal(summary["summary_sections"])
+	parsedSections, _ := json.Marshal(parsed.ParsedSections)
 	figureCaptions, _ := json.Marshal(parsed.Figures)
+	equations, _ := json.Marshal(parsed.Equations)
 	userPrompt := template.TemplateContent
 	replacements := map[string]string{
 		"{{paper_title}}":       paper.Title,
@@ -256,7 +266,11 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 		"{{source_url}}":        paper.SourceURL,
 		"{{paper_abstract}}":    paper.Abstract,
 		"{{section_summaries}}": string(sectionSummaries),
+		"{{parsed_sections}}":   string(parsedSections),
 		"{{figure_captions}}":   string(figureCaptions),
+		"{{selected_figures}}":  string(figureCaptions),
+		"{{equations}}":         string(equations),
+		"{{paper_code_url}}":    "无",
 	}
 	for key, value := range replacements {
 		userPrompt = strings.ReplaceAll(userPrompt, key, value)
@@ -276,7 +290,11 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 	if strings.TrimSpace(output.RecommendedTitle) == "" {
 		output.RecommendedTitle = fallback.RecommendedTitle
 	}
+	output.AltTitles = normalizeAltTitles(output.AltTitles, output.RecommendedTitle)
 	if strings.TrimSpace(output.Summary) == "" {
+		output.Summary = fallback.Summary
+	}
+	if utf8.RuneCountInString(strings.TrimSpace(output.Summary)) < 80 {
 		output.Summary = fallback.Summary
 	}
 	if strings.TrimSpace(output.IntroText) == "" {
@@ -309,9 +327,20 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 	if strings.TrimSpace(output.MarkdownContent) == "" {
 		output.MarkdownContent = fallback.MarkdownContent
 	}
+	if utf8.RuneCountInString(strings.TrimSpace(output.MarkdownContent)) < 1200 {
+		output.MarkdownContent = fallback.MarkdownContent
+	}
+
+	titleOutput, titlePromptVersion, err := s.generateTitleOptions(ctx, paper, output.RecommendedTitle, output.AltTitles, output.MethodsCN)
+	if err == nil {
+		output.RecommendedTitle = titleOutput.RecommendedTitle
+		output.AltTitles = titleOutput.AltTitles
+		template.Version = joinPromptVersions(template.Version, titlePromptVersion)
+	}
 
 	return generatedDraft{
 		RecommendedTitle: output.RecommendedTitle,
+		AltTitles:        output.AltTitles,
 		Summary:          output.Summary,
 		IntroText:        output.IntroText,
 		CoverText:        output.CoverText,
@@ -329,6 +358,44 @@ func (s *ProcessingService) generateDraftContent(ctx context.Context, paper *rep
 			"response": output,
 		},
 	}
+}
+
+func (s *ProcessingService) generateTitleOptions(ctx context.Context, paper *repository.ProcessingPaper, recommendedTitle string, altTitles []string, methodSummary string) (*llmTitleOutput, string, error) {
+	template, err := s.repo.GetActivePromptTemplate(ctx, "title")
+	if err != nil {
+		return nil, "", err
+	}
+
+	userPrompt := template.TemplateContent
+	replacements := map[string]string{
+		"{{paper_title}}":    paper.Title,
+		"{{paper_abstract}}": paper.Abstract,
+		"{{method_summary}}": methodSummary,
+	}
+	for key, value := range replacements {
+		userPrompt = strings.ReplaceAll(userPrompt, key, value)
+	}
+
+	systemPrompt := "你输出的是结构化 JSON，不要输出额外说明，不要输出 Markdown 代码块包裹符号。"
+	content, err := s.llm.Chat(ctx, systemPrompt, userPrompt)
+	if err != nil {
+		return nil, "", err
+	}
+
+	var output llmTitleOutput
+	if err := json.Unmarshal([]byte(stripMarkdownCodeFence(content)), &output); err != nil {
+		return nil, "", err
+	}
+
+	if strings.TrimSpace(output.RecommendedTitle) == "" {
+		output.RecommendedTitle = recommendedTitle
+	}
+	output.AltTitles = normalizeAltTitles(output.AltTitles, output.RecommendedTitle)
+	if len(output.AltTitles) == 0 {
+		output.AltTitles = normalizeAltTitles(altTitles, output.RecommendedTitle)
+	}
+
+	return &output, template.Version, nil
 }
 
 func (s *ProcessingService) ParseAndGenerateRecommended(ctx context.Context, input BatchParseGenerateInput) (*BatchParseGenerateResult, error) {
@@ -448,6 +515,8 @@ func (s *ProcessingService) buildAssets(paperID int64, pdfURL, pdfPath string, p
 		figureIndex := figure.FigureIndex
 		displayOrder := idx + 1
 		caption := figure.Caption
+		width := figure.Width
+		height := figure.Height
 		assets = append(assets, repository.AssetRecordInput{
 			PaperID:            paperID,
 			AssetType:          "FIGURE",
@@ -459,11 +528,14 @@ func (s *ProcessingService) buildAssets(paperID int64, pdfURL, pdfPath string, p
 			PageNo:             &pageNo,
 			FigureIndex:        &figureIndex,
 			Caption:            stringPtrIfPresent(caption),
+			Width:              &width,
+			Height:             &height,
 			DisplayOrder:       &displayOrder,
 			IsExperimentFigure: true,
 			BinaryData:         data,
 			ExtraMetadata: map[string]interface{}{
 				"caption_detected": caption != "",
+				"diagram_score":    figure.DiagramScore,
 			},
 		})
 	}
@@ -483,7 +555,8 @@ func buildStructuredSummary(parsed *pdfworker.ParseResponse, title string) map[s
 			"conclusion":  pickSummaryValue(parsed.Summary, "conclusion", ""),
 			"limitations": pickSummaryValue(parsed.Summary, "limitations", ""),
 		},
-		"figures": parsed.Figures,
+		"figures":   parsed.Figures,
+		"equations": parsed.Equations,
 	}
 }
 
@@ -508,7 +581,179 @@ func pickSummaryValue(source map[string]interface{}, key, fallback string) strin
 	return fallback
 }
 
-func generateMarkdownDraft(title, arxivID, sourceURL string, summary map[string]interface{}, figures []pdfworker.Figure) string {
+func generateMarkdownDraft(paper *repository.ProcessingPaper, parsed *pdfworker.ParseResponse, summary map[string]interface{}) string {
+	abstract := firstNonEmpty(
+		stringFromSummary(summary, "abstract"),
+		clipDraftText(paper.Abstract, 2200),
+	)
+	innovations := firstNonEmpty(
+		stringFromSummary(summary, "innovations"),
+		clipDraftText(primarySectionText(parsed, "method", "methods", "methodology", "approach"), 2600),
+	)
+	method := firstNonEmpty(
+		mergeDraftSections(
+			stringFromSummary(summary, "method"),
+			clipDraftText(primarySectionText(parsed, "method", "methods", "methodology", "approach"), 5200),
+		),
+		"当前 PDF 文本提取到的方法部分较少，建议人工回看原论文方法章节。",
+	)
+	experiments := firstNonEmpty(
+		mergeDraftSections(
+			stringFromSummary(summary, "experiments"),
+			clipDraftText(primarySectionText(parsed, "experiment", "experiments", "experimental setup", "results"), 5200),
+		),
+		"当前 PDF 文本提取到的实验部分较少，建议人工补充关键实验设置与指标。",
+	)
+	conclusion := firstNonEmpty(
+		stringFromSummary(summary, "conclusion"),
+		clipDraftText(primarySectionText(parsed, "conclusion"), 1800),
+	)
+	limitations := firstNonEmpty(
+		stringFromSummary(summary, "limitations"),
+		clipDraftText(primarySectionText(parsed, "limitations"), 1800),
+		"论文正文中未明确给出局限性，建议结合实验覆盖范围、泛化能力和标注质量进行人工补充。",
+	)
+	figures := topFigures(parsed.Figures, 4)
+	equations := topEquations(parsed.Equations, 4)
+
+	var b strings.Builder
+	b.WriteString("# " + paper.Title + "\n\n")
+	b.WriteString("论文标题：" + paper.Title + "\n")
+	b.WriteString("论文期刊：arXiv\n")
+	b.WriteString("论文代码：无\n")
+	b.WriteString("原文链接：" + paper.SourceURL + "\n")
+	b.WriteString("arXiv ID：`" + paper.ArxivID + "`\n\n")
+
+	b.WriteString("## 1 摘要\n\n")
+	b.WriteString(emptyFallback(abstract, "当前尚未生成可靠摘要，请人工补充。") + "\n\n")
+
+	b.WriteString("## 2 创新点\n\n")
+	if len(figures) > 0 {
+		b.WriteString("### 图片\n\n")
+		b.WriteString(buildFigureGuide(figures))
+		b.WriteString("\n")
+	}
+	b.WriteString(emptyFallback(innovations, "当前尚未抽取出清晰的创新点，请人工结合方法章节整理。") + "\n\n")
+
+	b.WriteString("## 3 方法\n\n")
+	b.WriteString(composeDraftIntro(paper.Title) + "\n\n")
+	b.WriteString(emptyFallback(method, "当前尚未抽取出清晰的方法细节，请人工回看论文方法部分。") + "\n\n")
+
+	b.WriteString("### 关键公式\n\n")
+	if len(equations) > 0 {
+		for _, equation := range equations {
+			b.WriteString("$$\n" + equation + "\n$$\n\n")
+		}
+	} else {
+		b.WriteString("当前 PDF 文本抽取未能稳定还原公式，建议结合原文方法部分人工补充关键损失函数、注意力计算式或优化目标。\n\n")
+	}
+
+	b.WriteString("## 4 实验\n\n")
+	b.WriteString(emptyFallback(experiments, "当前尚未抽取出清晰的实验结果，请人工补充实验设置、指标和对比基线。") + "\n\n")
+
+	b.WriteString("## 5 结论\n\n")
+	b.WriteString(emptyFallback(conclusion, "当前尚未生成结论总结，请人工补充论文结论。") + "\n\n")
+
+	b.WriteString("## 6 局限性与未来工作\n\n")
+	b.WriteString(emptyFallback(limitations, "建议从标注质量、数据覆盖范围、泛化能力与部署成本几个维度补充局限性和未来工作。") + "\n")
+	return b.String()
+}
+
+func composeDraftIntro(title string) string {
+	return "本文围绕论文《" + title + "》整理了一版偏详细的站内审阅稿，重点解释其问题设定、核心模块、方法流程、实验设计以及可复用的技术要点。当前内容基于论文 PDF 文本抽取和结构化总结生成，适合作为人工审阅和二次改写的底稿。"
+}
+
+func composeExecutiveSummary(summary map[string]interface{}) string {
+	return firstNonEmpty(
+		mergeDraftSections(
+			stringFromSummary(summary, "abstract"),
+			stringFromSummary(summary, "innovations"),
+			stringFromSummary(summary, "experiments"),
+		),
+		stringFromSummary(summary, "abstract"),
+	)
+}
+
+func primarySectionText(parsed *pdfworker.ParseResponse, keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(parsed.ParsedSections[key]); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func mergeDraftSections(values ...string) string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+	return strings.Join(result, "\n\n")
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if strings.TrimSpace(value) != "" {
+			return strings.TrimSpace(value)
+		}
+	}
+	return ""
+}
+
+func clipDraftText(v string, limit int) string {
+	trimmed := strings.TrimSpace(v)
+	if trimmed == "" || limit <= 0 {
+		return trimmed
+	}
+	runes := []rune(trimmed)
+	if len(runes) <= limit {
+		return trimmed
+	}
+	return strings.TrimSpace(string(runes[:limit])) + " ..."
+}
+
+func topFigures(figures []pdfworker.Figure, limit int) []pdfworker.Figure {
+	if len(figures) == 0 || limit <= 0 {
+		return nil
+	}
+	if len(figures) <= limit {
+		return figures
+	}
+	return figures[:limit]
+}
+
+func buildFigureGuide(figures []pdfworker.Figure) string {
+	var b strings.Builder
+	for _, fig := range figures {
+		b.WriteString(fmt.Sprintf("- 图 %d：第 %d 页，文件 `%s`。", fig.FigureIndex, fig.PageNo, fig.FileName))
+		if strings.TrimSpace(fig.Caption) != "" {
+			b.WriteString("图注：" + strings.TrimSpace(fig.Caption) + "。")
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+func topEquations(equations []string, limit int) []string {
+	if len(equations) == 0 || limit <= 0 {
+		return nil
+	}
+	if len(equations) <= limit {
+		return equations
+	}
+	return equations[:limit]
+}
+
+func legacyGenerateMarkdownDraft(title, arxivID, sourceURL string, summary map[string]interface{}, figures []pdfworker.Figure) string {
 	abstract := stringFromSummary(summary, "abstract")
 	innovations := stringFromSummary(summary, "innovations")
 	method := stringFromSummary(summary, "method")
@@ -551,6 +796,10 @@ func generateMarkdownDraft(title, arxivID, sourceURL string, summary map[string]
 }
 
 func composeIntro(title string) string {
+	return "本文围绕论文《" + title + "》生成一版站内审阅稿，重点覆盖研究问题、方法设计、关键模块、公式线索与实验结论，适合作为人工精修前的详细底稿。"
+}
+
+func legacyComposeIntro(title string) string {
 	return "本文对论文《" + title + "》做一版站内初稿整理，当前内容基于论文 PDF 提取与启发式摘要生成，适合作为人工审阅底稿。"
 }
 
@@ -574,4 +823,49 @@ func stripMarkdownCodeFence(v string) string {
 		trimmed = strings.TrimSuffix(trimmed, "```")
 	}
 	return strings.TrimSpace(trimmed)
+}
+
+func normalizeAltTitles(values []string, recommendedTitle string) []string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+
+	if trimmed := strings.TrimSpace(recommendedTitle); trimmed != "" {
+		seen[trimmed] = struct{}{}
+	}
+
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+		if len(result) == 3 {
+			break
+		}
+	}
+
+	return result
+}
+
+func joinPromptVersions(values ...string) string {
+	result := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed == "" {
+			continue
+		}
+		if _, ok := seen[trimmed]; ok {
+			continue
+		}
+		seen[trimmed] = struct{}{}
+		result = append(result, trimmed)
+	}
+
+	return strings.Join(result, "+")
 }

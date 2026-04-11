@@ -18,6 +18,8 @@ func NewRouter(cfg *config.Config, services *service.Services) *gin.Engine {
 
 	router.GET("/healthz", handler.Health)
 	router.GET("/", pageHandler.Home)
+	router.POST("/actions/discover", pageHandler.DiscoverAction)
+	router.POST("/actions/generate", pageHandler.GenerateAction)
 	router.GET("/drafts/:slug", pageHandler.DraftPage)
 	router.GET("/assets/:id", pageHandler.AssetBinary)
 
@@ -40,6 +42,7 @@ func NewRouter(cfg *config.Config, services *service.Services) *gin.Engine {
 		api.GET("/configs", handler.ListConfigs)
 		api.GET("/task-runs", handler.GetTaskRuns)
 		api.POST("/task-runs/daily-discovery/run", handler.RunDailyDiscovery)
+		api.POST("/task-runs/discover-generate/run", handler.RunDiscoverGenerate)
 		api.POST("/task-runs/recommended-papers/parse-generate/run", handler.RunParseGenerateRecommended)
 	}
 

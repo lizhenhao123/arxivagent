@@ -25,11 +25,14 @@ type RunDailyDiscoveryInput struct {
 	BizDate       time.Time
 	TriggerSource string
 	Force         bool
+	SearchTopic   string
+	MaxResults    int
 }
 
 type RunDailyDiscoveryResult struct {
 	TaskRunID              int64    `json:"task_run_id"`
 	BizDate                string   `json:"biz_date"`
+	SearchTopic            string   `json:"search_topic,omitempty"`
 	FetchedCount           int      `json:"fetched_count"`
 	FilteredCount          int      `json:"filtered_count"`
 	ScoredCount            int      `json:"scored_count"`
@@ -96,7 +99,7 @@ func (s *DiscoveryService) RunDaily(ctx context.Context, input RunDailyDiscovery
 		return nil, err
 	}
 
-	result, runErr := s.runDaily(ctx, taskRunID, bizDate)
+	result, runErr := s.runDaily(ctx, taskRunID, bizDate, input)
 	if runErr != nil {
 		errorMessage := runErr.Error()
 		summary, _ := json.Marshal(map[string]interface{}{
@@ -116,7 +119,7 @@ func (s *DiscoveryService) RunDaily(ctx context.Context, input RunDailyDiscovery
 	return result, nil
 }
 
-func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDate time.Time) (*RunDailyDiscoveryResult, error) {
+func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDate time.Time, input RunDailyDiscoveryInput) (*RunDailyDiscoveryResult, error) {
 	configMap, err := s.repo.GetConfigMap(ctx, "paper_selection", "discovery_filters", "discovery_keywords")
 	if err != nil {
 		return nil, err
@@ -136,6 +139,9 @@ func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDat
 	if filters.TimeWindowHours <= 0 {
 		filters.TimeWindowHours = 24
 	}
+	if input.MaxResults > 0 {
+		filters.MaxResults = input.MaxResults
+	}
 
 	keywords := discoveryKeywords{
 		TopicKeywords:      []string{"remote sensing", "earth observation", "satellite", "aerial", "geospatial", "sar", "multispectral", "hyperspectral", "change detection"},
@@ -146,6 +152,11 @@ func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDat
 	}
 	if raw := configMap["discovery_keywords"]; len(raw) > 0 {
 		_ = json.Unmarshal(raw, &keywords)
+	}
+
+	searchTopic := strings.TrimSpace(input.SearchTopic)
+	if customTopics := parseTopicKeywords(searchTopic); len(customTopics) > 0 {
+		keywords.TopicKeywords = customTopics
 	}
 
 	recommendationCount := 1
@@ -160,7 +171,7 @@ func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDat
 		recommendationCount = paperSelection.DailyRecommendationCount
 	}
 
-	searchQuery := buildSearchQuery(keywords.TopicKeywords, keywords.FoundationKeywords)
+	searchQuery := buildSearchQuery(keywords.TopicKeywords, keywords.FoundationKeywords, searchTopic != "")
 	papers, err := s.client.Search(ctx, arxiv.QueryOptions{
 		SearchQuery: searchQuery,
 		Start:       0,
@@ -285,6 +296,7 @@ func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDat
 	return &RunDailyDiscoveryResult{
 		TaskRunID:              taskRunID,
 		BizDate:                bizDate.Format("2006-01-02"),
+		SearchTopic:            searchTopic,
 		FetchedCount:           len(papers),
 		FilteredCount:          filteredCount,
 		ScoredCount:            scoredCount,
@@ -294,12 +306,14 @@ func (s *DiscoveryService) runDaily(ctx context.Context, taskRunID int64, bizDat
 	}, nil
 }
 
-func buildSearchQuery(topicKeywords, foundationKeywords []string) string {
+func buildSearchQuery(topicKeywords, foundationKeywords []string, topicOnly bool) string {
 	all := append([]string{}, topicKeywords...)
-	all = append(all, foundationKeywords...)
+	if !topicOnly {
+		all = append(all, foundationKeywords...)
+	}
 	parts := make([]string, 0, len(all))
 	for _, keyword := range all {
-		trimmed := strings.TrimSpace(keyword)
+		trimmed := sanitizeQueryTerm(keyword)
 		if trimmed == "" {
 			continue
 		}
@@ -309,6 +323,35 @@ func buildSearchQuery(topicKeywords, foundationKeywords []string) string {
 		return `all:"remote sensing"`
 	}
 	return strings.Join(parts, " OR ")
+}
+
+func parseTopicKeywords(raw string) []string {
+	normalized := strings.NewReplacer("，", ",", "；", ";", "、", ",", "\r", "\n").Replace(raw)
+	chunks := strings.FieldsFunc(normalized, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n'
+	})
+
+	items := make([]string, 0, len(chunks))
+	seen := make(map[string]struct{}, len(chunks))
+	for _, chunk := range chunks {
+		trimmed := sanitizeQueryTerm(chunk)
+		if trimmed == "" {
+			continue
+		}
+		key := strings.ToLower(trimmed)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		items = append(items, trimmed)
+	}
+
+	return items
+}
+
+func sanitizeQueryTerm(v string) string {
+	trimmed := strings.TrimSpace(strings.ReplaceAll(v, `"`, ""))
+	return strings.Join(strings.Fields(trimmed), " ")
 }
 
 func matchesWhitelist(categories, whitelist []string) bool {

@@ -114,12 +114,12 @@ func (r *ProcessingRepository) ListRecommendedPaperIDs(ctx context.Context, bizD
 }
 
 func (r *ProcessingRepository) UpsertPaperContent(ctx context.Context, input UpsertContentInput) (int64, error) {
-	pdfMetadata, _ := json.Marshal(input.PDFMetadata)
-	outline, _ := json.Marshal(input.SectionOutline)
-	sections, _ := json.Marshal(input.ParsedSections)
-	summary, _ := json.Marshal(input.StructuredSummary)
-	rawParser, _ := json.Marshal(input.RawParserOutput)
-	rawGen, _ := json.Marshal(input.RawGenerationOutput)
+	pdfMetadata, _ := json.Marshal(sanitizeJSONValue(input.PDFMetadata))
+	outline, _ := json.Marshal(sanitizeJSONValue(input.SectionOutline))
+	sections, _ := json.Marshal(sanitizeJSONValue(input.ParsedSections))
+	summary, _ := json.Marshal(sanitizeJSONValue(input.StructuredSummary))
+	rawParser, _ := json.Marshal(sanitizeJSONValue(input.RawParserOutput))
+	rawGen, _ := json.Marshal(sanitizeJSONValue(input.RawGenerationOutput))
 
 	var id int64
 	err := r.pool.QueryRow(ctx, `
@@ -192,7 +192,7 @@ func (r *ProcessingRepository) ReplaceAssets(ctx context.Context, paperID int64,
 	}
 
 	for _, asset := range assets {
-		extra, _ := json.Marshal(asset.ExtraMetadata)
+		extra, _ := json.Marshal(sanitizeJSONValue(asset.ExtraMetadata))
 		_, err = tx.Exec(ctx, `
 			INSERT INTO paper_assets (
 				paper_id, asset_type, asset_role, source_url, local_path, file_name, mime_type,
@@ -214,22 +214,24 @@ func (r *ProcessingRepository) ReplaceAssets(ctx context.Context, paperID int64,
 	return tx.Commit(ctx)
 }
 
-func (r *ProcessingRepository) UpsertGeneratedDraft(ctx context.Context, paperID, sourceContentID int64, title, summary, introText, markdownContent, renderedHTML, coverText string, tags []string, templateVersion, promptVersion, siteSlug, sitePath string) (int64, error) {
-	tagsJSON, _ := json.Marshal(tags)
+func (r *ProcessingRepository) UpsertGeneratedDraft(ctx context.Context, paperID, sourceContentID int64, title string, altTitles []string, summary, introText, markdownContent, renderedHTML, coverText string, tags []string, templateVersion, promptVersion, siteSlug, sitePath string) (int64, error) {
+	altTitlesJSON, _ := json.Marshal(sanitizeJSONValue(altTitles))
+	tagsJSON, _ := json.Marshal(sanitizeJSONValue(tags))
 	var id int64
 	err := r.pool.QueryRow(ctx, `
 		INSERT INTO article_drafts (
-			paper_id, draft_version, is_primary, title, summary, intro_text, markdown_content,
+			paper_id, draft_version, is_primary, title, alt_titles, summary, intro_text, markdown_content,
 			rendered_html, cover_text, tags, review_status, template_version, prompt_version,
 			source_content_id, site_slug, site_path
 		) VALUES (
-			$1, 1, TRUE, $2, $3, $4, $5,
-			$6, $7, $8, 'DRAFT', $9, $10,
-			$11, $12, $13
+			$1, 1, TRUE, $2, $3, $4, $5, $6,
+			$7, $8, $9, 'DRAFT', $10, $11,
+			$12, $13, $14
 		)
 		ON CONFLICT (paper_id, draft_version)
 		DO UPDATE SET
 			title = EXCLUDED.title,
+			alt_titles = EXCLUDED.alt_titles,
 			summary = EXCLUDED.summary,
 			intro_text = EXCLUDED.intro_text,
 			markdown_content = EXCLUDED.markdown_content,
@@ -243,7 +245,7 @@ func (r *ProcessingRepository) UpsertGeneratedDraft(ctx context.Context, paperID
 			site_path = EXCLUDED.site_path,
 			updated_at = NOW()
 		RETURNING id
-	`, paperID, title, summary, introText, markdownContent, renderedHTML, coverText, tagsJSON, templateVersion, promptVersion, sourceContentID, siteSlug, sitePath).Scan(&id)
+	`, paperID, title, altTitlesJSON, summary, introText, markdownContent, renderedHTML, coverText, tagsJSON, templateVersion, promptVersion, sourceContentID, siteSlug, sitePath).Scan(&id)
 	if err != nil {
 		return 0, err
 	}

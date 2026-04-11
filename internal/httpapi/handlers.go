@@ -238,8 +238,10 @@ func (h *Handler) GetTaskRuns(c *gin.Context) {
 
 func (h *Handler) RunDailyDiscovery(c *gin.Context) {
 	var req struct {
-		BizDate string `json:"biz_date"`
-		Force   bool   `json:"force"`
+		BizDate     string `json:"biz_date"`
+		Force       bool   `json:"force"`
+		SearchTopic string `json:"search_topic"`
+		MaxResults  int    `json:"max_results"`
 	}
 	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength > 0 {
 		respondError(c, http.StatusBadRequest, "invalid request body")
@@ -260,6 +262,8 @@ func (h *Handler) RunDailyDiscovery(c *gin.Context) {
 		BizDate:       bizDate,
 		TriggerSource: "manual",
 		Force:         req.Force,
+		SearchTopic:   req.SearchTopic,
+		MaxResults:    req.MaxResults,
 	})
 	if err != nil {
 		respondError(c, statusFromError(err), err.Error())
@@ -267,6 +271,59 @@ func (h *Handler) RunDailyDiscovery(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, APIResponse{Code: 0, Message: "ok", Data: result})
+}
+
+func (h *Handler) RunDiscoverGenerate(c *gin.Context) {
+	var req struct {
+		BizDate     string `json:"biz_date"`
+		Force       bool   `json:"force"`
+		SearchTopic string `json:"search_topic"`
+		MaxResults  int    `json:"max_results"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && c.Request.ContentLength > 0 {
+		respondError(c, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	var bizDate time.Time
+	var err error
+	if req.BizDate != "" {
+		bizDate, err = time.Parse("2006-01-02", req.BizDate)
+		if err != nil {
+			respondError(c, http.StatusBadRequest, "invalid biz_date, expected YYYY-MM-DD")
+			return
+		}
+	}
+
+	discoveryResult, err := h.services.Discovery.RunDaily(c.Request.Context(), service.RunDailyDiscoveryInput{
+		BizDate:       bizDate,
+		TriggerSource: "manual",
+		Force:         req.Force,
+		SearchTopic:   req.SearchTopic,
+		MaxResults:    req.MaxResults,
+	})
+	if err != nil {
+		respondError(c, statusFromError(err), err.Error())
+		return
+	}
+
+	parseResult, err := h.services.Processing.ParseAndGenerateRecommended(c.Request.Context(), service.BatchParseGenerateInput{
+		BizDate:       bizDate,
+		TriggerSource: "manual",
+	})
+	if err != nil {
+		respondError(c, statusFromError(err), err.Error())
+		return
+	}
+
+	c.JSON(http.StatusOK, APIResponse{
+		Code:    0,
+		Message: "ok",
+		Data: map[string]interface{}{
+			"discovery":      discoveryResult,
+			"parse_generate": parseResult,
+		},
+	})
 }
 
 func (h *Handler) RunParseGenerateRecommended(c *gin.Context) {

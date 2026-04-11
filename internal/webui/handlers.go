@@ -1,9 +1,12 @@
 package webui
 
 import (
+	"fmt"
 	"html/template"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -16,8 +19,11 @@ type Handler struct {
 }
 
 type homeData struct {
-	Title  string
-	Drafts interface{}
+	Title       string
+	SearchTopic string
+	Message     string
+	Error       string
+	Drafts      []model.SiteDraft
 }
 
 type draftPageData struct {
@@ -46,10 +52,56 @@ func (h *Handler) Home(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
+
 	c.HTML(http.StatusOK, "home.tmpl", homeData{
-		Title:  "今日论文稿件",
-		Drafts: drafts,
+		Title:       "今日论文稿件",
+		SearchTopic: strings.TrimSpace(c.Query("topic")),
+		Message:     strings.TrimSpace(c.Query("message")),
+		Error:       strings.TrimSpace(c.Query("error")),
+		Drafts:      drafts,
 	})
+}
+
+func (h *Handler) DiscoverAction(c *gin.Context) {
+	searchTopic := strings.TrimSpace(c.PostForm("search_topic"))
+
+	result, err := h.services.Discovery.RunDaily(c.Request.Context(), service.RunDailyDiscoveryInput{
+		TriggerSource: "manual",
+		Force:         true,
+		SearchTopic:   searchTopic,
+	})
+	if err != nil {
+		redirectHome(c, searchTopic, "", err.Error())
+		return
+	}
+
+	message := fmt.Sprintf("发现完成：抓取 %d 篇，筛选 %d 篇，推荐 %d 篇。", result.FetchedCount, result.FilteredCount, result.RecommendedCount)
+	redirectHome(c, searchTopic, message, "")
+}
+
+func (h *Handler) GenerateAction(c *gin.Context) {
+	searchTopic := strings.TrimSpace(c.PostForm("search_topic"))
+
+	discoveryResult, err := h.services.Discovery.RunDaily(c.Request.Context(), service.RunDailyDiscoveryInput{
+		TriggerSource: "manual",
+		Force:         true,
+		SearchTopic:   searchTopic,
+	})
+	if err != nil {
+		redirectHome(c, searchTopic, "", err.Error())
+		return
+	}
+
+	parseResult, err := h.services.Processing.ParseAndGenerateRecommended(c.Request.Context(), service.BatchParseGenerateInput{
+		TriggerSource: "manual",
+	})
+	if err != nil {
+		redirectHome(c, searchTopic, "", err.Error())
+		return
+	}
+
+	message := fmt.Sprintf("已完成搜索并生成：推荐 %d 篇，成功生成 %d 篇稿件。", discoveryResult.RecommendedCount, parseResult.ProcessedCount)
+	redirectHome(c, searchTopic, message, "")
 }
 
 func (h *Handler) DraftPage(c *gin.Context) {
@@ -62,6 +114,7 @@ func (h *Handler) DraftPage(c *gin.Context) {
 		c.String(http.StatusInternalServerError, err.Error())
 		return
 	}
+
 	c.HTML(http.StatusOK, "draft.tmpl", draftPageData{
 		Title: post.Title,
 		Post: draftPagePost{
@@ -100,4 +153,23 @@ func safeRenderedHTML(post *model.SitePost) string {
 		return *post.RenderedHTML
 	}
 	return "<pre>" + template.HTMLEscapeString(post.MarkdownContent) + "</pre>"
+}
+
+func redirectHome(c *gin.Context, topic, message, errText string) {
+	params := url.Values{}
+	if strings.TrimSpace(topic) != "" {
+		params.Set("topic", strings.TrimSpace(topic))
+	}
+	if strings.TrimSpace(message) != "" {
+		params.Set("message", strings.TrimSpace(message))
+	}
+	if strings.TrimSpace(errText) != "" {
+		params.Set("error", strings.TrimSpace(errText))
+	}
+
+	target := "/"
+	if encoded := params.Encode(); encoded != "" {
+		target += "?" + encoded
+	}
+	c.Redirect(http.StatusSeeOther, target)
 }

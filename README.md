@@ -83,10 +83,13 @@ go run ./cmd/api
 ## 说明
 
 - `configs/runtime.local.json` 已被 `.gitignore` 忽略。
-- 当前还没有接入 arXiv 抓取、PDF 解析和文章生成。
 - 当前已经接入 arXiv 发现与规则打分的第一版手动触发流程。
 - 当前已经接入 PDF 下载、Python 解析脚本调用和 Markdown 草稿生成链路。
 - 当前已经接入可配置的 LLM 总结与标题生成，失败时自动回退启发式流程。
+- 当前已经接入站内审阅页面：
+  - `/`
+  - `/drafts/:slug`
+  - `/assets/:id`
 - `render` 接口当前使用的是最小 Markdown 渲染逻辑，后续可以替换为正式渲染器。
 
 ## 手动触发示例
